@@ -55,57 +55,97 @@ class DiplomacyBot:
         content = f"{article.get('title', '')}{article.get('url', '')}"
         return hashlib.md5(content.encode()).hexdigest()
 
-    async def fetch_news(self):
-        """Fetch all kinds of news - simplified approach"""
+    async def fetch_diplomatic_news(self):
+        """Fetch diplomatic news with multiple query approaches"""
         try:
-            # Get news from last 24 hours
-            from_date = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d')
+            # Try different diplomatic news queries
+            queries = [
+                # Broad diplomatic terms
+                "diplomacy OR \"foreign affairs\" OR \"foreign minister\" OR \"international relations\"",
+                # Specific diplomatic events and organizations
+                "\"peace talks\" OR embassy OR ambassador OR \"state department\" OR \"diplomatic relations\"",
+                # International organizations
+                "UN OR \"United Nations\" OR NATO OR EU OR \"European Union\"",
+                # Bilateral relations between major countries
+                "\"US China\" OR \"India Pakistan\" OR \"Russia Ukraine\" OR \"Israel Palestine\""
+            ]
             
-            # Very broad query to get all types of news
-            query = "politics OR economy OR technology OR sports OR entertainment OR business OR health OR science"
+            articles = []
             
-            news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=10&apiKey={self.NEWS_API_KEY}"
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.info("Fetching news...")
-                headers = {'User-Agent': 'NewsBot/1.0'}
-                resp = await client.get(news_api_url, headers=headers)
-                
-                if resp.status_code != 200:
-                    logger.error(f"NewsAPI error: {resp.status_code}")
-                    # Fallback to top headlines if everything endpoint fails
-                    return await self.fetch_top_headlines()
-                
-                data = resp.json()
-                
-                if data.get('status') != 'ok':
-                    logger.error(f"NewsAPI status not ok: {data.get('status')}")
-                    return await self.fetch_top_headlines()
-                
-                articles = data.get("articles", [])
-                logger.info(f"API returned {len(articles)} articles")
-                
-                # Process articles and remove duplicates
-                filtered_articles = []
-                for art in articles:
-                    try:
-                        source = art.get('source', {})
-                        source_name = source.get('name', 'Unknown')
+            for query in queries:
+                try:
+                    # Get news from last 48 hours for better coverage
+                    from_date = (datetime.now() - timedelta(hours=48)).strftime('%Y-%m-%d')
+                    
+                    news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=10&apiKey={self.NEWS_API_KEY}"
+                    
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        logger.info(f"Fetching news with query: {query}")
+                        headers = {'User-Agent': 'DiplomacyBot/1.0'}
+                        resp = await client.get(news_api_url, headers=headers)
                         
-                        title = str(art.get("title", "")).strip()
-                        description = str(art.get("description", "")).strip()
-                        url = str(art.get("url", "")).strip()
-                        image_url = str(art.get("urlToImage", "")).strip()
+                        if resp.status_code != 200:
+                            continue
                         
-                        # Skip if missing essential fields
-                        if not title or not url:
+                        data = resp.json()
+                        
+                        if data.get('status') != 'ok':
                             continue
+                        
+                        new_articles = data.get("articles", [])
+                        articles.extend(new_articles)
+                        logger.info(f"Query '{query}' returned {len(new_articles)} articles")
+                        
+                        # If we got enough articles, break early
+                        if len(articles) >= 15:
+                            break
                             
-                        # Generate unique hash for duplicate detection
-                        article_hash = self.get_article_hash(art)
-                        if article_hash in self.sent_articles:
-                            continue
-                            
+                except Exception as e:
+                    logger.warning(f"Error with query '{query}': {e}")
+                    continue
+            
+            logger.info(f"Total articles from all queries: {len(articles)}")
+            
+            # If no articles from everything endpoint, try top headlines
+            if not articles:
+                return await self.fetch_diplomatic_headlines()
+            
+            # Process articles and remove duplicates
+            filtered_articles = []
+            for art in articles:
+                try:
+                    source = art.get('source', {})
+                    source_name = source.get('name', 'Unknown')
+                    
+                    title = str(art.get("title", "")).strip()
+                    description = str(art.get("description", "")).strip()
+                    url = str(art.get("url", "")).strip()
+                    image_url = str(art.get("urlToImage", "")).strip()
+                    
+                    # Skip if missing essential fields
+                    if not title or not url:
+                        continue
+                        
+                    # Generate unique hash for duplicate detection
+                    article_hash = self.get_article_hash(art)
+                    if article_hash in self.sent_articles:
+                        continue
+                        
+                    # Ensure it's actually diplomatic content
+                    title_lower = title.lower()
+                    desc_lower = (description or "").lower()
+                    
+                    diplomatic_terms = [
+                        'diplomacy', 'diplomatic', 'foreign affairs', 'foreign minister',
+                        'international relations', 'peace talks', 'embassy', 'ambassador',
+                        'treaty', 'negotiation', 'summit', 'foreign policy', 'state visit',
+                        'un', 'nato', 'eu', 'united nations', 'state department'
+                    ]
+                    
+                    is_diplomatic = any(term in title_lower for term in diplomatic_terms)
+                    is_diplomatic |= any(term in desc_lower for term in diplomatic_terms)
+                    
+                    if is_diplomatic:
                         filtered_articles.append({
                             'title': title,
                             'description': description,
@@ -114,98 +154,120 @@ class DiplomacyBot:
                             'source': source_name,
                             'hash': article_hash
                         })
-                            
-                    except Exception as e:
-                        logger.warning(f"Error processing article: {e}")
-                        continue
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing article: {e}")
+                    continue
+            
+            logger.info(f"Filtered to {len(filtered_articles)} diplomatic articles")
+            return filtered_articles[:3]  # Return top 3 articles
                 
-                logger.info(f"Found {len(filtered_articles)} new articles")
-                return filtered_articles[:3]  # Return top 3 articles
-                    
         except Exception as e:
-            logger.error(f"Error fetching news: {e}")
-            return await self.fetch_top_headlines()
+            logger.error(f"Error fetching diplomatic news: {e}")
+            return await self.fetch_diplomatic_headlines()
 
-    async def fetch_top_headlines(self):
-        """Fallback method to fetch top headlines if everything endpoint fails"""
+    async def fetch_diplomatic_headlines(self):
+        """Fallback to diplomatic headlines"""
         try:
-            news_api_url = f"https://newsapi.org/v2/top-headlines?country=us&pageSize=5&apiKey={self.NEWS_API_KEY}"
+            # Try different countries for headlines
+            countries = ['us', 'gb', 'in', 'cn', 'ru']  # US, UK, India, China, Russia
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.info("Fetching top headlines as fallback...")
-                headers = {'User-Agent': 'NewsBot/1.0'}
-                resp = await client.get(news_api_url, headers=headers)
-                
-                if resp.status_code != 200:
-                    return []
-                
-                data = resp.json()
-                
-                if data.get('status') != 'ok':
-                    return []
-                
-                articles = data.get("articles", [])
-                logger.info(f"Top headlines returned {len(articles)} articles")
-                
-                filtered_articles = []
-                for art in articles:
-                    try:
-                        source = art.get('source', {})
-                        source_name = source.get('name', 'Unknown')
+            for country in countries:
+                try:
+                    news_api_url = f"https://newsapi.org/v2/top-headlines?country={country}&category=general&pageSize=10&apiKey={self.NEWS_API_KEY}"
+                    
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        logger.info(f"Fetching headlines from {country}...")
+                        headers = {'User-Agent': 'DiplomacyBot/1.0'}
+                        resp = await client.get(news_api_url, headers=headers)
                         
-                        title = str(art.get("title", "")).strip()
-                        description = str(art.get("description", "")).strip()
-                        url = str(art.get("url", "")).strip()
-                        image_url = str(art.get("urlToImage", "")).strip()
+                        if resp.status_code != 200:
+                            continue
                         
-                        if not title or not url:
+                        data = resp.json()
+                        
+                        if data.get('status') != 'ok':
                             continue
+                        
+                        articles = data.get("articles", [])
+                        logger.info(f"Headlines from {country}: {len(articles)} articles")
+                        
+                        # Filter for diplomatic content
+                        filtered_articles = []
+                        for art in articles:
+                            try:
+                                source = art.get('source', {})
+                                source_name = source.get('name', 'Unknown')
+                                
+                                title = str(art.get("title", "")).strip()
+                                description = str(art.get("description", "")).strip()
+                                url = str(art.get("url", "")).strip()
+                                image_url = str(art.get("urlToImage", "")).strip()
+                                
+                                if not title or not url:
+                                    continue
+                                    
+                                article_hash = self.get_article_hash(art)
+                                if article_hash in self.sent_articles:
+                                    continue
+                                    
+                                # Check for diplomatic content
+                                title_lower = title.lower()
+                                diplomatic_terms = [
+                                    'diplomacy', 'foreign', 'international', 'embassy',
+                                    'ambassador', 'summit', 'treaty', 'negotiation'
+                                ]
+                                
+                                is_diplomatic = any(term in title_lower for term in diplomatic_terms)
+                                
+                                if is_diplomatic:
+                                    filtered_articles.append({
+                                        'title': title,
+                                        'description': description,
+                                        'url': url,
+                                        'image_url': image_url,
+                                        'source': source_name,
+                                        'hash': article_hash
+                                    })
+                                    
+                            except Exception as e:
+                                continue
+                        
+                        if filtered_articles:
+                            return filtered_articles[:2]
                             
-                        article_hash = self.get_article_hash(art)
-                        if article_hash in self.sent_articles:
-                            continue
-                            
-                        filtered_articles.append({
-                            'title': title,
-                            'description': description,
-                            'url': url,
-                            'image_url': image_url,
-                            'source': source_name,
-                            'hash': article_hash
-                        })
-                            
-                    except Exception as e:
-                        continue
-                
-                return filtered_articles[:2]  # Return top 2 headlines
+                except Exception as e:
+                    continue
+            
+            return []
                     
         except Exception as e:
-            logger.error(f"Error fetching top headlines: {e}")
+            logger.error(f"Error fetching diplomatic headlines: {e}")
             return []
 
     async def send_news_update(self):
-        """Send news update to channel"""
+        """Send diplomatic news update to channel"""
         try:
-            logger.info("Fetching news update...")
-            news_items = await self.fetch_news()
+            logger.info("Fetching diplomatic news update...")
+            news_items = await self.fetch_diplomatic_news()
             
             if not news_items:
-                logger.info("No new news found")
+                logger.info("No diplomatic news found")
                 return
             
             # Send articles
             for news in news_items:
                 try:
                     # Create caption
-                    caption = f"📰 **News Update**\n\n"
-                    caption += f"*{news['title']}*\n\n"
+                    caption = f"🌍 **Diplomatic News Update**\n\n"
+                    caption += f"📰 *{news['title']}*\n\n"
                     
                     if news['description'] and len(news['description']) > 20:
                         caption += f"{news['description']}\n\n"
                     
                     caption += f"🔗 [Read Full Article]({news['url']})\n"
                     caption += f"📊 Source: {news['source']}\n"
-                    caption += f"#News #Update"
+                    caption += f"#Diplomacy #InternationalRelations"
                     
                     # Send with image if available
                     if news['image_url'] and news['image_url'].startswith('http'):
@@ -216,7 +278,7 @@ class DiplomacyBot:
                                 caption=caption,
                                 parse_mode='Markdown'
                             )
-                            logger.info(f"✅ Sent news with image from {news['source']}")
+                            logger.info(f"✅ Sent diplomatic news from {news['source']}")
                         except Exception as e:
                             logger.warning(f"Image failed, sending text: {e}")
                             await self.send_text_news(news, caption)
@@ -250,7 +312,7 @@ class DiplomacyBot:
     async def run(self):
         """Main function to start the bot"""
         try:
-            logger.info("🚀 Starting News Bot (30-min updates)...")
+            logger.info("🚀 Starting Diplomatic News Bot (30-min updates)...")
             
             # Test connection
             try:
