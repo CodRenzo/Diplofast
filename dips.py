@@ -3,6 +3,14 @@ from telegram import Bot
 from telegram.error import TelegramError
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- CONFIG ---
 BOT_TOKEN = "8104734743:AAGgw7h_Lb_Cdu_zQW9JV8uaAKb6TW7Z1DA"
@@ -33,35 +41,46 @@ async def fetch_latest_news():
             return "\n\n".join(news_list) if news_list else "No valid news articles found."
             
         except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching news: {e}")
             return f"HTTP error fetching news: {e}"
         except Exception as e:
+            logger.error(f"Error fetching news: {e}")
             return f"Error fetching news: {e}"
 
 async def send_news():
     """Send news to the specified channel"""
-    news = await fetch_latest_news()
     try:
+        news = await fetch_latest_news()
         await bot.send_message(chat_id=CHANNEL_ID, text=news)
-        print(f"✅ News sent successfully to {CHANNEL_ID}")
+        logger.info(f"✅ News sent successfully to {CHANNEL_ID}")
     except TelegramError as e:
-        print(f"❌ Failed to send message to {CHANNEL_ID}: {e}")
+        logger.error(f"❌ Failed to send message to {CHANNEL_ID}: {e}")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}")
 
 async def main():
     """Main function to start the scheduler"""
+    logger.info("🚀 Starting Diplomacy News Bot...")
+    
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_news, "interval", hours=1)
     scheduler.start()
-    print(f"🚀 Scheduler started. Bot will post to {CHANNEL_ID} every hour.")
+    
+    logger.info(f"✅ Scheduler started. Bot will post to {CHANNEL_ID} every hour.")
     
     # Send initial message
     await send_news()
     
     # Keep the script running
     try:
-        await asyncio.Future()
+        while True:
+            await asyncio.sleep(3600)  # Sleep for 1 hour
     except (KeyboardInterrupt, SystemExit):
-        print("🛑 Scheduler stopped.")
+        logger.info("🛑 Shutting down scheduler...")
         scheduler.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
