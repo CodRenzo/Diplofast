@@ -12,7 +12,11 @@ import os
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('diplomacy_bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -73,7 +77,7 @@ class DiplomacyBot:
             news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=15&apiKey={self.NEWS_API_KEY}"
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.info("Fetching diplomatic news with focus on major countries and India's neighbors...")
+                logger.info("Fetching diplomatic news...")
                 headers = {'User-Agent': 'DiplomacyBot/1.0'}
                 resp = await client.get(news_api_url, headers=headers)
                 
@@ -90,7 +94,7 @@ class DiplomacyBot:
                 articles = data.get("articles", [])
                 logger.info(f"Raw API returned {len(articles)} articles")
                 
-                # Filter for quality diplomatic news and remove duplicates
+                # Filter for quality diplomatic news
                 filtered_articles = []
                 for art in articles:
                     try:
@@ -102,41 +106,30 @@ class DiplomacyBot:
                         url = str(art.get("url", "")).strip()
                         image_url = str(art.get("urlToImage", "")).strip()
                         
-                        # Skip if missing essential fields
                         if not title or not url:
                             continue
                             
-                        # Generate unique hash for duplicate detection
                         article_hash = self.get_article_hash(art)
                         if article_hash in self.sent_articles:
                             continue
                             
-                        # Check content relevance
                         title_lower = title.lower()
                         desc_lower = (description or "").lower()
                         
-                        # Diplomatic keywords
                         diplomatic_keywords = [
                             'diplomacy', 'diplomatic', 'foreign affairs', 'foreign minister',
                             'international relations', 'peace talks', 'embassy', 'ambassador',
                             'treaty', 'negotiation', 'summit', 'foreign policy', 'state visit'
                         ]
                         
-                        # Country categories with different priorities
                         india_neighbors = ['india', 'indian', 'pakistan', 'bangladesh', 'nepal', 
-                                         'sri lanka', 'bhutan', 'myanmar', 'afghanistan', 'maldives',
-                                         'south asia']
+                                         'sri lanka', 'bhutan', 'myanmar', 'afghanistan', 'maldives']
                         
                         major_powers = ['usa', 'united states', 'china', 'russia', 'uk', 'united kingdom',
                                       'france', 'germany', 'japan', 'europe', 'nato', 'un', 'united nations']
                         
                         has_diplomatic = any(keyword in title_lower for keyword in diplomatic_keywords)
                         has_diplomatic |= any(keyword in desc_lower for keyword in diplomatic_keywords)
-                        
-                        # Priority system:
-                        # 1: Diplomatic + India/neighbors (highest priority)
-                        # 2: Diplomatic + major powers
-                        # 3: Diplomatic content only
                         
                         priority = 0
                         if has_diplomatic:
@@ -159,13 +152,11 @@ class DiplomacyBot:
                             })
                             
                     except Exception as e:
-                        logger.warning(f"Error processing article: {e}")
                         continue
                 
-                # Sort by priority (India/neighbors first, then major powers, then others)
                 filtered_articles.sort(key=lambda x: x['priority'])
                 logger.info(f"Filtered to {len(filtered_articles)} relevant articles")
-                return filtered_articles[:3]  # Return top 3 articles
+                return filtered_articles[:2]  # Return top 2 articles
                     
         except Exception as e:
             logger.error(f"Error fetching news: {e}")
@@ -174,17 +165,14 @@ class DiplomacyBot:
     async def send_news_update(self):
         """Send news update to channel"""
         try:
-            logger.info("Fetching diplomatic news update...")
             news_items = await self.fetch_diplomatic_news()
             
             if not news_items:
-                logger.info("No new diplomatic news found in the last hour")
+                logger.info("No new diplomatic news found")
                 return
             
-            # Send articles
             for news in news_items:
                 try:
-                    # Create caption
                     caption = f"🌍 **Diplomacy Update**\n\n"
                     caption += f"📰 *{news['title']}*\n\n"
                     
@@ -194,7 +182,6 @@ class DiplomacyBot:
                     caption += f"🔗 [Read Full Article]({news['url']})\n"
                     caption += f"📊 Source: {news['source']}\n"
                     
-                    # Add priority tag
                     if news['priority'] == 1:
                         caption += f"🏷️ #India #SouthAsia #Diplomacy"
                     elif news['priority'] == 2:
@@ -202,7 +189,6 @@ class DiplomacyBot:
                     else:
                         caption += f"🏷️ #Diplomacy"
                     
-                    # Send with image if available
                     if news['image_url'] and news['image_url'].startswith('http'):
                         try:
                             await self.bot.send_photo(
@@ -211,18 +197,15 @@ class DiplomacyBot:
                                 caption=caption,
                                 parse_mode='Markdown'
                             )
-                            logger.info(f"✅ Sent news with image from {news['source']}")
+                            logger.info(f"✅ Sent news from {news['source']}")
                         except Exception as e:
-                            logger.warning(f"Image failed, sending text: {e}")
                             await self.send_text_news(news, caption)
                     else:
                         await self.send_text_news(news, caption)
                     
-                    # Mark as sent and save
                     self.sent_articles.add(news['hash'])
                     self.save_sent_articles()
                     
-                    # Wait between posts
                     await asyncio.sleep(2)
                     
                 except Exception as e:
@@ -240,14 +223,12 @@ class DiplomacyBot:
             parse_mode='Markdown',
             disable_web_page_preview=False
         )
-        logger.info(f"✅ Sent text news from {news['source']}")
 
     async def run(self):
         """Main function to start the bot"""
         try:
             logger.info("🚀 Starting Diplomacy News Bot (30-min updates)...")
             
-            # Test connection
             try:
                 me = await self.bot.get_me()
                 logger.info(f"Bot connected: @{me.username}")
@@ -266,7 +247,7 @@ class DiplomacyBot:
             
             # Keep the bot running
             while True:
-                await asyncio.sleep(1800)  # Sleep for 30 minutes
+                await asyncio.sleep(1800)
                 
         except (KeyboardInterrupt, SystemExit):
             logger.info("🛑 Shutting down...")
