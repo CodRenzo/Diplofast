@@ -12,11 +12,7 @@ import os
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('diplomacy_bot.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -30,6 +26,7 @@ class DiplomacyBot:
         self.sent_articles = set()
         self.sent_articles_file = "sent_articles.json"
         
+        # Load previously sent articles
         self.load_sent_articles()
 
     def load_sent_articles(self):
@@ -59,22 +56,20 @@ class DiplomacyBot:
         return hashlib.md5(content.encode()).hexdigest()
 
     async def fetch_diplomatic_news(self):
-        """Fetch diplomatic news focusing on major countries and India's neighbors"""
+        """Fetch diplomatic news with focus on global and India-related content"""
         try:
-            # Get news from last 1 hour for frequent updates
-            from_date = (datetime.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')
+            # Get news from last 6 hours for better coverage
+            from_date = (datetime.now() - timedelta(hours=6)).strftime('%Y-%m-%dT%H:%M:%S')
             
-            # Focus on major global powers AND India's neighboring countries
+            # More flexible query to ensure we get results
             query = (
-                "(diplomacy OR \"foreign affairs\" OR \"foreign minister\" OR "
-                "\"international relations\" OR \"peace talks\" OR embassy OR ambassador) "
-                "AND (USA OR \"United States\" OR China OR Russia OR \"United Kingdom\" OR UK "
-                "OR France OR Germany OR Japan OR India OR Pakistan OR Bangladesh OR Nepal "
-                "OR Sri Lanka OR Bhutan OR Myanmar OR \"South Asia\" OR Afghanistan OR Maldives "
-                "OR \"Middle East\" OR Europe OR NATO OR UN OR \"United Nations\")"
+                "diplomacy OR \"foreign affairs\" OR \"foreign minister\" OR "
+                "\"international relations\" OR \"peace talks\" OR embassy OR ambassador OR "
+                "\"state department\" OR \"diplomatic relations\" OR "
+                "India OR Pakistan OR Bangladesh OR Nepal OR Sri Lanka OR China OR Russia OR USA"
             )
             
-            news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=15&apiKey={self.NEWS_API_KEY}"
+            news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=20&apiKey={self.NEWS_API_KEY}"
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 logger.info("Fetching diplomatic news...")
@@ -94,7 +89,7 @@ class DiplomacyBot:
                 articles = data.get("articles", [])
                 logger.info(f"Raw API returned {len(articles)} articles")
                 
-                # Filter for quality diplomatic news
+                # Filter for quality diplomatic news and remove duplicates
                 filtered_articles = []
                 for art in articles:
                     try:
@@ -106,34 +101,49 @@ class DiplomacyBot:
                         url = str(art.get("url", "")).strip()
                         image_url = str(art.get("urlToImage", "")).strip()
                         
+                        # Skip if missing essential fields
                         if not title or not url:
                             continue
                             
+                        # Generate unique hash for duplicate detection
                         article_hash = self.get_article_hash(art)
                         if article_hash in self.sent_articles:
                             continue
                             
+                        # Check content relevance
                         title_lower = title.lower()
                         desc_lower = (description or "").lower()
                         
+                        # Diplomatic keywords
                         diplomatic_keywords = [
                             'diplomacy', 'diplomatic', 'foreign affairs', 'foreign minister',
                             'international relations', 'peace talks', 'embassy', 'ambassador',
                             'treaty', 'negotiation', 'summit', 'foreign policy', 'state visit'
                         ]
                         
-                        india_neighbors = ['india', 'indian', 'pakistan', 'bangladesh', 'nepal', 
-                                         'sri lanka', 'bhutan', 'myanmar', 'afghanistan', 'maldives']
+                        # Country categories with different priorities
+                        india_and_neighbors = [
+                            'india', 'indian', 'modi', 'delhi', 'mumbai', 
+                            'pakistan', 'bangladesh', 'nepal', 'sri lanka', 'bhutan',
+                            'myanmar', 'afghanistan', 'maldives', 'south asia'
+                        ]
                         
-                        major_powers = ['usa', 'united states', 'china', 'russia', 'uk', 'united kingdom',
-                                      'france', 'germany', 'japan', 'europe', 'nato', 'un', 'united nations']
+                        major_powers = [
+                            'usa', 'united states', 'china', 'russia', 'uk', 'united kingdom',
+                            'france', 'germany', 'japan', 'europe', 'nato', 'un', 'united nations'
+                        ]
                         
                         has_diplomatic = any(keyword in title_lower for keyword in diplomatic_keywords)
                         has_diplomatic |= any(keyword in desc_lower for keyword in diplomatic_keywords)
                         
+                        # Priority system:
+                        # 1: Diplomatic + India/neighbors (highest priority)
+                        # 2: Diplomatic + major powers
+                        # 3: Diplomatic content only
+                        
                         priority = 0
                         if has_diplomatic:
-                            if any(country in title_lower for country in india_neighbors):
+                            if any(country in title_lower for country in india_and_neighbors):
                                 priority = 1
                             elif any(country in title_lower for country in major_powers):
                                 priority = 2
@@ -152,11 +162,13 @@ class DiplomacyBot:
                             })
                             
                     except Exception as e:
+                        logger.warning(f"Error processing article: {e}")
                         continue
                 
+                # Sort by priority (India/neighbors first, then major powers, then others)
                 filtered_articles.sort(key=lambda x: x['priority'])
                 logger.info(f"Filtered to {len(filtered_articles)} relevant articles")
-                return filtered_articles[:2]  # Return top 2 articles
+                return filtered_articles[:3]  # Return top 3 articles
                     
         except Exception as e:
             logger.error(f"Error fetching news: {e}")
@@ -165,14 +177,17 @@ class DiplomacyBot:
     async def send_news_update(self):
         """Send news update to channel"""
         try:
+            logger.info("Fetching diplomatic news update...")
             news_items = await self.fetch_diplomatic_news()
             
             if not news_items:
                 logger.info("No new diplomatic news found")
                 return
             
+            # Send articles
             for news in news_items:
                 try:
+                    # Create caption
                     caption = f"🌍 **Diplomacy Update**\n\n"
                     caption += f"📰 *{news['title']}*\n\n"
                     
@@ -182,6 +197,7 @@ class DiplomacyBot:
                     caption += f"🔗 [Read Full Article]({news['url']})\n"
                     caption += f"📊 Source: {news['source']}\n"
                     
+                    # Add priority-specific tags
                     if news['priority'] == 1:
                         caption += f"🏷️ #India #SouthAsia #Diplomacy"
                     elif news['priority'] == 2:
@@ -189,6 +205,7 @@ class DiplomacyBot:
                     else:
                         caption += f"🏷️ #Diplomacy"
                     
+                    # Send with image if available
                     if news['image_url'] and news['image_url'].startswith('http'):
                         try:
                             await self.bot.send_photo(
@@ -197,15 +214,18 @@ class DiplomacyBot:
                                 caption=caption,
                                 parse_mode='Markdown'
                             )
-                            logger.info(f"✅ Sent news from {news['source']}")
+                            logger.info(f"✅ Sent news with image from {news['source']}")
                         except Exception as e:
+                            logger.warning(f"Image failed, sending text: {e}")
                             await self.send_text_news(news, caption)
                     else:
                         await self.send_text_news(news, caption)
                     
+                    # Mark as sent and save
                     self.sent_articles.add(news['hash'])
                     self.save_sent_articles()
                     
+                    # Wait between posts to avoid rate limiting
                     await asyncio.sleep(2)
                     
                 except Exception as e:
@@ -223,12 +243,14 @@ class DiplomacyBot:
             parse_mode='Markdown',
             disable_web_page_preview=False
         )
+        logger.info(f"✅ Sent text news from {news['source']}")
 
     async def run(self):
         """Main function to start the bot"""
         try:
             logger.info("🚀 Starting Diplomacy News Bot (30-min updates)...")
             
+            # Test connection
             try:
                 me = await self.bot.get_me()
                 logger.info(f"Bot connected: @{me.username}")
@@ -247,7 +269,7 @@ class DiplomacyBot:
             
             # Keep the bot running
             while True:
-                await asyncio.sleep(1800)
+                await asyncio.sleep(1800)  # Sleep for 30 minutes
                 
         except (KeyboardInterrupt, SystemExit):
             logger.info("🛑 Shutting down...")
