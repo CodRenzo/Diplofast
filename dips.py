@@ -1,10 +1,9 @@
 import asyncio
 import logging
-from telegram import Bot, InputMediaPhoto
+from telegram import Bot
 from telegram.error import TelegramError
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import json
 from datetime import datetime, timedelta
 
 # Configure logging
@@ -17,22 +16,23 @@ logger = logging.getLogger(__name__)
 class DiplomacyBot:
     def __init__(self):
         self.BOT_TOKEN = "8104734743:AAGgw7h_Lb_Cdu_zQW9JV8uaAKb6TW7Z1DA"
-        self.NEWS_API_KEY = "ef68ac134f8d4c8988a7e9e16b5e984c"  # Your NewsAPI key
+        self.NEWS_API_KEY = "ef68ac134f8d4c8988a7e9e16b5e984c"
         self.CHANNEL_ID = "@GeoDiplomacyy"
         self.bot = Bot(token=self.BOT_TOKEN)
         self.scheduler = AsyncIOScheduler()
 
-    async def fetch_english_news(self):
-        """Fetch English diplomatic news with images from NewsAPI"""
+    async def fetch_global_diplomatic_news(self):
+        """Fetch global English diplomatic news from reputable sources"""
         try:
-            # Get news from last 24 hours
+            # Get news from last 24 hours from top international sources
             from_date = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d')
             
-            news_api_url = f"https://newsapi.org/v2/everything?q=diplomacy+OR+foreign+affairs+OR+international+relations&language=en&from={from_date}&sortBy=publishedAt&pageSize=5&apiKey={self.NEWS_API_KEY}"
+            # Focus on major global news sources and specific diplomatic terms
+            news_api_url = f"https://newsapi.org/v2/everything?q=diplomacy OR \"foreign affairs\" OR \"state department\" OR \"foreign minister\" OR \"international relations\" OR \"peace talks\"&language=en&sortBy=publishedAt&pageSize=3&apiKey={self.NEWS_API_KEY}"
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.info("Fetching news from NewsAPI...")
-                headers = {'User-Agent': 'DiplomacyBot/1.0'}
+                logger.info("Fetching global diplomatic news from NewsAPI...")
+                headers = {'User-Agent': 'GlobalDiplomacyBot/1.0'}
                 resp = await client.get(news_api_url, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
@@ -40,93 +40,80 @@ class DiplomacyBot:
                 articles = data.get("articles", [])
                 
                 if not articles:
-                    logger.warning("No articles found in NewsAPI response")
-                    # Fallback to GDELT
-                    return await self.fetch_gdelt_news()
+                    logger.warning("No diplomatic articles found")
+                    return []
                 
-                news_items = []
-                for art in articles[:3]:  # Get top 3 articles with images
-                    title = art.get("title", "").strip()
-                    description = art.get("description", "").strip()
-                    url = art.get("url", "").strip()
-                    image_url = art.get("urlToImage", "").strip()
-                    source = art.get("source", {}).get("name", "Unknown")
-                    
-                    if title and url:
-                        news_item = {
-                            'title': title,
-                            'description': description,
-                            'url': url,
-                            'image_url': image_url,
-                            'source': source
-                        }
-                        news_items.append(news_item)
+                # Filter for reputable international sources
+                reputable_sources = ['reuters', 'ap', 'bbc', 'bloomberg', 'the-wall-street-journal', 
+                                   'the-new-york-times', 'washington-post', 'foreign-policy', 'politico']
                 
-                logger.info(f"Fetched {len(news_items)} news articles with media")
-                return news_items
-                    
-        except Exception as e:
-            logger.error(f"Error fetching from NewsAPI: {e}")
-            # Fallback to GDELT
-            return await self.fetch_gdelt_news()
-
-    async def fetch_gdelt_news(self):
-        """Fallback to GDELT if NewsAPI fails"""
-        try:
-            gdelt_url = "https://api.gdeltproject.org/api/v2/doc/doc?query=diplomacy&mode=ArtList&format=json&maxrecords=3"
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(gdelt_url)
-                resp.raise_for_status()
-                data = resp.json()
-                articles = data.get("articles", [])
-                
-                news_items = []
+                filtered_articles = []
                 for art in articles:
-                    title = art.get("title", "").strip()
-                    url = art.get("url", "").strip()
+                    source_id = art.get('source', {}).get('id', '').lower()
+                    source_name = art.get('source', {}).get('name', '').lower()
                     
-                    if title and url:
-                        news_items.append({
-                            'title': title,
-                            'description': "",
-                            'url': url,
-                            'image_url': "",
-                            'source': "GDELT"
-                        })
+                    # Check if from reputable source or has diplomatic relevance
+                    if (any(src in source_id for src in reputable_sources) or 
+                        any(src in source_name for src in reputable_sources) or
+                        any(keyword in art.get('title', '').lower() for keyword in 
+                            ['diplomacy', 'foreign affairs', 'state department', 'foreign minister'])):
+                        
+                        title = art.get("title", "").strip()
+                        description = art.get("description", "").strip()
+                        url = art.get("url", "").strip()
+                        image_url = art.get("urlToImage", "").strip()
+                        source = art.get("source", {}).get("name", "Unknown")
+                        
+                        if title and url and self.is_english(title):
+                            filtered_articles.append({
+                                'title': title,
+                                'description': description,
+                                'url': url,
+                                'image_url': image_url,
+                                'source': source
+                            })
                 
-                return news_items
-                
+                logger.info(f"Found {len(filtered_articles)} global diplomatic news articles")
+                return filtered_articles[:2]  # Return only top 2 articles
+                    
         except Exception as e:
-            logger.error(f"Error fetching from GDELT: {e}")
+            logger.error(f"Error fetching diplomatic news: {e}")
             return []
 
-    async def send_news_with_media(self):
-        """Send news with images/videos to channel"""
+    def is_english(self, text):
+        """Check if text is primarily English"""
         try:
-            logger.info("Fetching news with media...")
-            news_items = await self.fetch_english_news()
+            # Simple check - most English text will have primarily ASCII characters
+            english_chars = sum(1 for c in text if ord(c) < 128)
+            return english_chars / len(text) > 0.7 if text else False
+        except:
+            return False
+
+    async def send_quality_news(self):
+        """Send high-quality global diplomatic news"""
+        try:
+            logger.info("Fetching quality diplomatic news...")
+            news_items = await self.fetch_global_diplomatic_news()
             
             if not news_items:
-                logger.warning("No news items to send")
-                # Send a fallback message
-                await self.bot.send_message(
-                    chat_id=self.CHANNEL_ID,
-                    text="🌍 No new diplomatic news found in the last 24 hours. Check back later!",
-                    parse_mode='Markdown'
-                )
+                logger.info("No quality diplomatic news found")
                 return
             
-            for news in news_items:
+            # Send only 1-2 best articles
+            for news in news_items[:2]:
                 try:
-                    # Create caption
-                    caption = f"📰 *{news['title']}*\n\n"
-                    if news['description']:
-                        caption += f"{news['description']}\n\n"
-                    caption += f"🔗 [Read more]({news['url']})\n"
-                    caption += f"📚 Source: {news['source']}"
+                    # Create professional caption
+                    caption = f"🌍 **Global Diplomacy Update**\n\n"
+                    caption += f"📰 *{news['title']}*\n\n"
                     
-                    # Send message with media if available
+                    if news['description'] and len(news['description']) > 20:
+                        caption += f"{news['description']}\n\n"
+                    
+                    caption += f"🔗 [Read Full Article]({news['url']})\n"
+                    caption += f"🏛️ Source: {news['source']}\n"
+                    caption += f"🕒 #Diplomacy #GlobalAffairs"
+                    
+                    # Send with image if available
                     if news['image_url'] and news['image_url'].startswith('http'):
                         try:
                             await self.bot.send_photo(
@@ -135,38 +122,37 @@ class DiplomacyBot:
                                 caption=caption,
                                 parse_mode='Markdown'
                             )
-                            logger.info(f"✅ Sent news with image: {news['title'][:50]}...")
+                            logger.info(f"✅ Sent quality news: {news['title'][:50]}...")
                         except Exception as e:
-                            logger.warning(f"Couldn't send image, sending text only: {e}")
-                            await self.bot.send_message(
-                                chat_id=self.CHANNEL_ID,
-                                text=caption,
-                                parse_mode='Markdown',
-                                disable_web_page_preview=False
-                            )
+                            logger.warning(f"Image failed, sending text: {e}")
+                            await self.send_text_news(news, caption)
                     else:
-                        await self.bot.send_message(
-                            chat_id=self.CHANNEL_ID,
-                            text=caption,
-                            parse_mode='Markdown',
-                            disable_web_page_preview=False
-                        )
-                        logger.info(f"✅ Sent text news: {news['title'][:50]}...")
+                        await self.send_text_news(news, caption)
                     
-                    # Wait 2 seconds between messages to avoid rate limiting
-                    await asyncio.sleep(2)
+                    # Wait between posts
+                    await asyncio.sleep(3)
                     
                 except Exception as e:
                     logger.error(f"Error sending news item: {e}")
                     continue
                     
         except Exception as e:
-            logger.error(f"❌ Error in send_news_with_media: {e}")
+            logger.error(f"❌ Error in send_quality_news: {e}")
+
+    async def send_text_news(self, news, caption):
+        """Send news as text message"""
+        await self.bot.send_message(
+            chat_id=self.CHANNEL_ID,
+            text=caption,
+            parse_mode='Markdown',
+            disable_web_page_preview=False
+        )
+        logger.info(f"✅ Sent text news: {news['title'][:50]}...")
 
     async def run(self):
         """Main function to start the bot"""
         try:
-            logger.info("🚀 Starting Enhanced Diplomacy News Bot...")
+            logger.info("🚀 Starting Global Diplomacy News Bot...")
             
             # Test connection
             try:
@@ -176,18 +162,18 @@ class DiplomacyBot:
                 logger.error(f"Bot connection failed: {e}")
                 return
 
-            # Setup scheduler - run every 3 hours to avoid spam
-            self.scheduler.add_job(self.send_news_with_media, "interval", hours=3, misfire_grace_time=60)
+            # Setup scheduler - run every 6 hours for quality content
+            self.scheduler.add_job(self.send_quality_news, "interval", hours=6, misfire_grace_time=60)
             self.scheduler.start()
             
-            logger.info("✅ Scheduler started. Bot will post every 3 hours.")
+            logger.info("✅ Scheduler started. Bot will post quality news every 6 hours.")
             
             # Send initial message
-            await self.send_news_with_media()
+            await self.send_quality_news()
             
             # Keep the bot running
             while True:
-                await asyncio.sleep(10800)  # Sleep for 3 hours
+                await asyncio.sleep(21600)  # Sleep for 6 hours
                 
         except (KeyboardInterrupt, SystemExit):
             logger.info("🛑 Shutting down...")
