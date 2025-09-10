@@ -55,41 +55,37 @@ class DiplomacyBot:
         content = f"{article.get('title', '')}{article.get('url', '')}"
         return hashlib.md5(content.encode()).hexdigest()
 
-    async def fetch_diplomatic_news(self):
-        """Fetch diplomatic news with focus on global and India-related content"""
+    async def fetch_news(self):
+        """Fetch all kinds of news - simplified approach"""
         try:
-            # Get news from last 6 hours for better coverage
-            from_date = (datetime.now() - timedelta(hours=6)).strftime('%Y-%m-%dT%H:%M:%S')
+            # Get news from last 24 hours
+            from_date = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%d')
             
-            # More flexible query to ensure we get results
-            query = (
-                "diplomacy OR \"foreign affairs\" OR \"foreign minister\" OR "
-                "\"international relations\" OR \"peace talks\" OR embassy OR ambassador OR "
-                "\"state department\" OR \"diplomatic relations\" OR "
-                "India OR Pakistan OR Bangladesh OR Nepal OR Sri Lanka OR China OR Russia OR USA"
-            )
+            # Very broad query to get all types of news
+            query = "politics OR economy OR technology OR sports OR entertainment OR business OR health OR science"
             
-            news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=20&apiKey={self.NEWS_API_KEY}"
+            news_api_url = f"https://newsapi.org/v2/everything?q={query}&language=en&from={from_date}&sortBy=publishedAt&pageSize=10&apiKey={self.NEWS_API_KEY}"
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.info("Fetching diplomatic news...")
-                headers = {'User-Agent': 'DiplomacyBot/1.0'}
+                logger.info("Fetching news...")
+                headers = {'User-Agent': 'NewsBot/1.0'}
                 resp = await client.get(news_api_url, headers=headers)
                 
                 if resp.status_code != 200:
                     logger.error(f"NewsAPI error: {resp.status_code}")
-                    return []
+                    # Fallback to top headlines if everything endpoint fails
+                    return await self.fetch_top_headlines()
                 
                 data = resp.json()
                 
                 if data.get('status') != 'ok':
                     logger.error(f"NewsAPI status not ok: {data.get('status')}")
-                    return []
+                    return await self.fetch_top_headlines()
                 
                 articles = data.get("articles", [])
-                logger.info(f"Raw API returned {len(articles)} articles")
+                logger.info(f"API returned {len(articles)} articles")
                 
-                # Filter for quality diplomatic news and remove duplicates
+                # Process articles and remove duplicates
                 filtered_articles = []
                 for art in articles:
                     try:
@@ -110,100 +106,106 @@ class DiplomacyBot:
                         if article_hash in self.sent_articles:
                             continue
                             
-                        # Check content relevance
-                        title_lower = title.lower()
-                        desc_lower = (description or "").lower()
-                        
-                        # Diplomatic keywords
-                        diplomatic_keywords = [
-                            'diplomacy', 'diplomatic', 'foreign affairs', 'foreign minister',
-                            'international relations', 'peace talks', 'embassy', 'ambassador',
-                            'treaty', 'negotiation', 'summit', 'foreign policy', 'state visit'
-                        ]
-                        
-                        # Country categories with different priorities
-                        india_and_neighbors = [
-                            'india', 'indian', 'modi', 'delhi', 'mumbai', 
-                            'pakistan', 'bangladesh', 'nepal', 'sri lanka', 'bhutan',
-                            'myanmar', 'afghanistan', 'maldives', 'south asia'
-                        ]
-                        
-                        major_powers = [
-                            'usa', 'united states', 'china', 'russia', 'uk', 'united kingdom',
-                            'france', 'germany', 'japan', 'europe', 'nato', 'un', 'united nations'
-                        ]
-                        
-                        has_diplomatic = any(keyword in title_lower for keyword in diplomatic_keywords)
-                        has_diplomatic |= any(keyword in desc_lower for keyword in diplomatic_keywords)
-                        
-                        # Priority system:
-                        # 1: Diplomatic + India/neighbors (highest priority)
-                        # 2: Diplomatic + major powers
-                        # 3: Diplomatic content only
-                        
-                        priority = 0
-                        if has_diplomatic:
-                            if any(country in title_lower for country in india_and_neighbors):
-                                priority = 1
-                            elif any(country in title_lower for country in major_powers):
-                                priority = 2
-                            else:
-                                priority = 3
-                        
-                        if priority > 0:
-                            filtered_articles.append({
-                                'title': title,
-                                'description': description,
-                                'url': url,
-                                'image_url': image_url,
-                                'source': source_name,
-                                'priority': priority,
-                                'hash': article_hash
-                            })
+                        filtered_articles.append({
+                            'title': title,
+                            'description': description,
+                            'url': url,
+                            'image_url': image_url,
+                            'source': source_name,
+                            'hash': article_hash
+                        })
                             
                     except Exception as e:
                         logger.warning(f"Error processing article: {e}")
                         continue
                 
-                # Sort by priority (India/neighbors first, then major powers, then others)
-                filtered_articles.sort(key=lambda x: x['priority'])
-                logger.info(f"Filtered to {len(filtered_articles)} relevant articles")
+                logger.info(f"Found {len(filtered_articles)} new articles")
                 return filtered_articles[:3]  # Return top 3 articles
                     
         except Exception as e:
             logger.error(f"Error fetching news: {e}")
+            return await self.fetch_top_headlines()
+
+    async def fetch_top_headlines(self):
+        """Fallback method to fetch top headlines if everything endpoint fails"""
+        try:
+            news_api_url = f"https://newsapi.org/v2/top-headlines?country=us&pageSize=5&apiKey={self.NEWS_API_KEY}"
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                logger.info("Fetching top headlines as fallback...")
+                headers = {'User-Agent': 'NewsBot/1.0'}
+                resp = await client.get(news_api_url, headers=headers)
+                
+                if resp.status_code != 200:
+                    return []
+                
+                data = resp.json()
+                
+                if data.get('status') != 'ok':
+                    return []
+                
+                articles = data.get("articles", [])
+                logger.info(f"Top headlines returned {len(articles)} articles")
+                
+                filtered_articles = []
+                for art in articles:
+                    try:
+                        source = art.get('source', {})
+                        source_name = source.get('name', 'Unknown')
+                        
+                        title = str(art.get("title", "")).strip()
+                        description = str(art.get("description", "")).strip()
+                        url = str(art.get("url", "")).strip()
+                        image_url = str(art.get("urlToImage", "")).strip()
+                        
+                        if not title or not url:
+                            continue
+                            
+                        article_hash = self.get_article_hash(art)
+                        if article_hash in self.sent_articles:
+                            continue
+                            
+                        filtered_articles.append({
+                            'title': title,
+                            'description': description,
+                            'url': url,
+                            'image_url': image_url,
+                            'source': source_name,
+                            'hash': article_hash
+                        })
+                            
+                    except Exception as e:
+                        continue
+                
+                return filtered_articles[:2]  # Return top 2 headlines
+                    
+        except Exception as e:
+            logger.error(f"Error fetching top headlines: {e}")
             return []
 
     async def send_news_update(self):
         """Send news update to channel"""
         try:
-            logger.info("Fetching diplomatic news update...")
-            news_items = await self.fetch_diplomatic_news()
+            logger.info("Fetching news update...")
+            news_items = await self.fetch_news()
             
             if not news_items:
-                logger.info("No new diplomatic news found")
+                logger.info("No new news found")
                 return
             
             # Send articles
             for news in news_items:
                 try:
                     # Create caption
-                    caption = f"🌍 **Diplomacy Update**\n\n"
-                    caption += f"📰 *{news['title']}*\n\n"
+                    caption = f"📰 **News Update**\n\n"
+                    caption += f"*{news['title']}*\n\n"
                     
                     if news['description'] and len(news['description']) > 20:
                         caption += f"{news['description']}\n\n"
                     
                     caption += f"🔗 [Read Full Article]({news['url']})\n"
                     caption += f"📊 Source: {news['source']}\n"
-                    
-                    # Add priority-specific tags
-                    if news['priority'] == 1:
-                        caption += f"🏷️ #India #SouthAsia #Diplomacy"
-                    elif news['priority'] == 2:
-                        caption += f"🏷️ #GlobalAffairs #Diplomacy"
-                    else:
-                        caption += f"🏷️ #Diplomacy"
+                    caption += f"#News #Update"
                     
                     # Send with image if available
                     if news['image_url'] and news['image_url'].startswith('http'):
@@ -248,7 +250,7 @@ class DiplomacyBot:
     async def run(self):
         """Main function to start the bot"""
         try:
-            logger.info("🚀 Starting Diplomacy News Bot (30-min updates)...")
+            logger.info("🚀 Starting News Bot (30-min updates)...")
             
             # Test connection
             try:
